@@ -16,11 +16,11 @@ on:
     inputs:
       config-path:
         description: >-
-          Path to a commitlint config in the calling repo. When absent, a conventional-commits
-          default is written at runtime so a repo needs no dependency of its own.
+          Explicit path to a commitlint config. Normally unset: the job discovers every name
+          cosmiconfig accepts and defers to commitlint's own resolution when it finds one.
         type: string
         required: false
-        default: "commitlint.config.js"
+        default: ""
 
 permissions:
   contents: read
@@ -45,26 +45,40 @@ jobs:
           CONFIG: ${{ inputs.config-path }}
         run: |
           set -euo pipefail
-          if [ -f "$CONFIG" ]; then
-            echo "Using repo config: $CONFIG"
-            echo "path=$CONFIG" >> "$GITHUB_OUTPUT"
-            exit 0
+
+          # Look for every name commitlint's own cosmiconfig resolution accepts, not just one.
+          # Getting this wrong is silent and expensive: an unfound config falls back to the shared
+          # default, which then judges a repo by rules it never adopted. debt-collection uses
+          # commitlint.config.TS and was measured against a stricter default — 77 commits failed a
+          # rule its own config does not set.
+          if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
+            echo "Using the caller's explicit config: $CONFIG"
+            echo "args=--config $CONFIG" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          # A repo with no JS toolchain still gets the check. Written to the runner, never committed.
+          for f in commitlint.config.ts commitlint.config.js commitlint.config.mjs \
+                   commitlint.config.cjs .commitlintrc .commitlintrc.json .commitlintrc.yaml \
+                   .commitlintrc.yml .commitlintrc.js .commitlintrc.cjs .commitlintrc.ts; do
+            if [ -f "$f" ]; then
+              # Found one: pass NO --config and let commitlint resolve it itself, so extends,
+              # monorepo lookup and TS loading all behave exactly as they do locally.
+              echo "Repo config found ($f) — deferring to commitlint's own resolution."
+              echo "args=" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          done
+          if [ -f package.json ] && jq -e '.commitlint' package.json >/dev/null 2>&1; then
+            echo "Repo config found (package.json#commitlint) — deferring to commitlint."
+            echo "args=" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # No config at all: a repo with no JS toolchain still gets the check. Plain
+          # config-conventional with NO added rules — a shared default that is stricter than the
+          # config repos actually adopt would fail commits the org considers fine, which is how a
+          # guard trains people to ignore it.
           cat > /tmp/commitlint.config.mjs <<'CFG'
-          export default {
-            extends: ["@commitlint/config-conventional"],
-            rules: {
-              // Matches the types debt-collection uses, so a message that passes here passes there.
-              "type-enum": [2, "always",
-                ["feat","fix","refactor","docs","test","chore","perf","style","build","ci","revert"]],
-              "subject-case": [2, "never", ["upper-case", "pascal-case", "start-case"]],
-              "header-max-length": [2, "always", 72],
-            },
-          };
+          export default { extends: ["@commitlint/config-conventional"] };
           CFG
-          echo "No $CONFIG in this repo — using the shared conventional default."
-          echo "path=/tmp/commitlint.config.mjs" >> "$GITHUB_OUTPUT"
+          echo "No commitlint config in this repo — using plain @commitlint/config-conventional."
+          echo "args=--config /tmp/commitlint.config.mjs" >> "$GITHUB_OUTPUT"
 
       # The range, resolved from the event WITHOUT interpolating any text. On a PR this is the merge
       # base to the head SHA; on a push it is the pushed range. Both are SHAs, never messages.
@@ -94,12 +108,15 @@ jobs:
 
       - name: commitlint
         env:
-          CFG_PATH: ${{ steps.config.outputs.path }}
+          CFG_ARGS: ${{ steps.config.outputs.args }}
           FROM: ${{ steps.range.outputs.from }}
           TO: ${{ steps.range.outputs.to }}
         run: |
           set -euo pipefail
+          # Unquoted on purpose: CFG_ARGS is either empty or `--config <path>`, and quoting it would
+          # pass an empty string as an argument. It is set by the step above, never by an event.
+          # shellcheck disable=SC2086
           npx --yes \
             --package @commitlint/cli \
             --package @commitlint/config-conventional \
-            -- commitlint --config "$CFG_PATH" --from "$FROM" --to "$TO" --verbose
+            -- commitlint $CFG_ARGS --from "$FROM" --to "$TO" --verbose
