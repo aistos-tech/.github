@@ -106,6 +106,16 @@ jobs:
           echo "to=$to"     >> "$GITHUB_OUTPUT"
           echo "Linting $from..$to"
 
+      # Installed OUTSIDE the repository, on purpose. npx and npm read package.json from the
+      # working directory, and a repo that declares `devEngines.packageManager: bun` aborts any
+      # npm-family command with EBADDEVENGINES before it starts — a guard aimed at humans reaching
+      # for the wrong package manager, which a CI step inherits by accident.
+      - name: Install commitlint outside the repo
+        working-directory: ${{ runner.temp }}
+        run: npm install --no-save --prefix "$RUNNER_TEMP/cl" @commitlint/cli @commitlint/config-conventional
+
+      # ...but RUN inside it, so config discovery, `extends` and the git range all resolve against
+      # the repository rather than the temp directory.
       - name: commitlint
         env:
           CFG_ARGS: ${{ steps.config.outputs.args }}
@@ -113,10 +123,8 @@ jobs:
           TO: ${{ steps.range.outputs.to }}
         run: |
           set -euo pipefail
-          # Unquoted on purpose: CFG_ARGS is either empty or `--config <path>`, and quoting it would
-          # pass an empty string as an argument. It is set by the step above, never by an event.
+          # NODE_PATH so a repo config's `extends: ["@commitlint/config-conventional"]` resolves to
+          # the copy installed above, without the repo needing its dependencies installed.
+          export NODE_PATH="$RUNNER_TEMP/cl/node_modules"
           # shellcheck disable=SC2086
-          npx --yes \
-            --package @commitlint/cli \
-            --package @commitlint/config-conventional \
-            -- commitlint $CFG_ARGS --from "$FROM" --to "$TO" --verbose
+          "$RUNNER_TEMP/cl/node_modules/.bin/commitlint" $CFG_ARGS --from "$FROM" --to "$TO" --verbose
