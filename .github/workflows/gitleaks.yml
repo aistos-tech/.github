@@ -1,0 +1,70 @@
+name: Secret scan
+
+# Reusable secret scan. Call it from a repository like this:
+#
+#   jobs:
+#     secrets:
+#       uses: aistos-tech/.github/.github/workflows/gitleaks.yml@main
+#
+# Reusable workflows are PULL-based: this file cannot apply itself to a repository. Each repo
+# commits the four lines above. What the org repo buys is one place to change the body.
+#
+# WHY the binary rather than gitleaks/gitleaks-action: the action requires a paid licence key for
+# organisation-owned repositories and fails the run without one. The binary is the same scanner
+# under the same licence terms, with no key.
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: >-
+          Path to a gitleaks config in the calling repo. Defaults to .gitleaks.toml when present,
+          otherwise gitleaks' built-in rules.
+        type: string
+        required: false
+        default: ".gitleaks.toml"
+      version:
+        description: "gitleaks release to pin. Bump deliberately — a floating scanner changes what CI means."
+        type: string
+        required: false
+        default: "8.28.0"
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: a scan of one commit cannot see a secret introduced earlier in the branch and
+      # removed in the tip, which is exactly the case worth catching before it merges.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan
+        env:
+          CONFIG: ${{ inputs.config-path }}
+        run: |
+          set -euo pipefail
+          args="--no-banner --redact --verbose"
+          if [ -f "$CONFIG" ]; then
+            echo "Using repo config: $CONFIG"
+            args="$args --config $CONFIG"
+          else
+            echo "No $CONFIG in this repo — scanning with gitleaks' built-in rules."
+          fi
+          # `git` mode scans history rather than the worktree, so a secret that was committed and
+          # later deleted is still found. That is the whole point of fetch-depth: 0 above.
+          # shellcheck disable=SC2086
+          gitleaks git $args .

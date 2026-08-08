@@ -1,0 +1,105 @@
+name: Commit messages
+
+# Reusable conventional-commits check. Call it from a repository like this:
+#
+#   jobs:
+#     commits:
+#       uses: aistos-tech/.github/.github/workflows/commitlint.yml@main
+#
+# ⚠️ Commit messages are attacker-controlled on a fork PR, and they are on GitHub's
+# workflow-injection list. Nothing here interpolates a message: commitlint is pointed at a git
+# RANGE and reads the messages from git itself, so no subject ever reaches a shell. Keep it that
+# way — `echo "${{ github.event.head_commit.message }}"` is the shape that gets repos owned.
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: >-
+          Path to a commitlint config in the calling repo. When absent, a conventional-commits
+          default is written at runtime so a repo needs no dependency of its own.
+        type: string
+        required: false
+        default: "commitlint.config.js"
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: commitlint
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the range below walks from the merge base, which a shallow clone cannot reach.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Resolve the config
+        id: config
+        env:
+          CONFIG: ${{ inputs.config-path }}
+        run: |
+          set -euo pipefail
+          if [ -f "$CONFIG" ]; then
+            echo "Using repo config: $CONFIG"
+            echo "path=$CONFIG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A repo with no JS toolchain still gets the check. Written to the runner, never committed.
+          cat > /tmp/commitlint.config.mjs <<'CFG'
+          export default {
+            extends: ["@commitlint/config-conventional"],
+            rules: {
+              // Matches the types debt-collection uses, so a message that passes here passes there.
+              "type-enum": [2, "always",
+                ["feat","fix","refactor","docs","test","chore","perf","style","build","ci","revert"]],
+              "subject-case": [2, "never", ["upper-case", "pascal-case", "start-case"]],
+              "header-max-length": [2, "always", 72],
+            },
+          };
+          CFG
+          echo "No $CONFIG in this repo — using the shared conventional default."
+          echo "path=/tmp/commitlint.config.mjs" >> "$GITHUB_OUTPUT"
+
+      # The range, resolved from the event WITHOUT interpolating any text. On a PR this is the merge
+      # base to the head SHA; on a push it is the pushed range. Both are SHAs, never messages.
+      - name: Resolve the commit range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ] || [ "$EVENT" = "pull_request_target" ]; then
+            from="$BASE_SHA"; to="$HEAD_SHA"
+          else
+            from="$PUSH_BEFORE"; to="$PUSH_AFTER"
+          fi
+          # A branch's first push reports an all-zero "before"; fall back to the single tip commit.
+          case "$from" in
+            0000000000000000000000000000000000000000|"") from="${to}~1" ;;
+          esac
+          git rev-parse --verify "$from" >/dev/null 2>&1 || from="${to}~1"
+          echo "from=$from" >> "$GITHUB_OUTPUT"
+          echo "to=$to"     >> "$GITHUB_OUTPUT"
+          echo "Linting $from..$to"
+
+      - name: commitlint
+        env:
+          CFG_PATH: ${{ steps.config.outputs.path }}
+          FROM: ${{ steps.range.outputs.from }}
+          TO: ${{ steps.range.outputs.to }}
+        run: |
+          set -euo pipefail
+          npx --yes \
+            --package @commitlint/cli \
+            --package @commitlint/config-conventional \
+            -- commitlint --config "$CFG_PATH" --from "$FROM" --to "$TO" --verbose
