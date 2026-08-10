@@ -70,14 +70,32 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          # No config at all: a repo with no JS toolchain still gets the check. Plain
-          # config-conventional with NO added rules — a shared default that is stricter than the
-          # config repos actually adopt would fail commits the org considers fine, which is how a
-          # guard trains people to ignore it.
+          # No config at all: a repo with no JS toolchain still gets the check.
+          #
+          # ⚠️ THESE THREE RULES ARE THE ORG'S, AND THEY ARE DUPLICATED IN EVERY REPO THAT SHIPS ITS
+          # OWN `commitlint.config.ts` — a repo config is used INSTEAD of this block, not on top of
+          # it, so a change here that is not mirrored there makes the two disagree. They must stay
+          # the same three lines. The hazard used to be a shared default STRICTER than what repos
+          # adopt; since 2026-08-10 it is the reverse, because these three loosen plain
+          # config-conventional rather than tighten it.
+          #
+          #   header 100  — a subject is read in `git log --oneline`, in a PR title and in a
+          #                 release note. It has no reason to be long.
+          #   body   120  — 100 was the config-conventional default and it was too low: measured
+          #                 2026-08-10, an ordinary unwrapped bullet lands at 116.
+          #   footer off  — a footer line is a TRAILER (`Co-Authored-By:`, `Refs:`, a URL). It is
+          #                 machine-read, and wrapping a URL to fit a column breaks it.
           cat > /tmp/commitlint.config.mjs <<'CFG'
-          export default { extends: ["@commitlint/config-conventional"] };
+          export default {
+            extends: ["@commitlint/config-conventional"],
+            rules: {
+              "header-max-length": [2, "always", 100],
+              "body-max-line-length": [2, "always", 120],
+              "footer-max-line-length": [0],
+            },
+          };
           CFG
-          echo "No commitlint config in this repo — using plain @commitlint/config-conventional."
+          echo "No commitlint config in this repo — using config-conventional plus the org rules."
           echo "args=--config /tmp/commitlint.config.mjs" >> "$GITHUB_OUTPUT"
 
       # The range, resolved from the event WITHOUT interpolating any text. On a PR this is the merge
