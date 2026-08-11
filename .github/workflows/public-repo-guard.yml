@@ -1,0 +1,238 @@
+name: Public repo guard
+
+# Reusable check for repositories whose source is PUBLIC. Call it like this:
+#
+#   jobs:
+#     public-repo:
+#       uses: aistos-tech/.github/.github/workflows/public-repo-guard.yml@main
+#       secrets:
+#         terms: ${{ secrets.PUBLIC_REPO_TERMS }}
+#
+# It answers one question: does this change publish something that names a client, a customer
+# engagement, or business context? Two independent halves, because one cannot cover the other:
+#
+#   1. TERMS  — a denylist, supplied as a secret, matched against the pushed commit range: the
+#               messages AND the patches. Never against the checkout alone. Three of the leaks
+#               that motivated this workflow were commit messages, which a tree scan cannot see,
+#               and a term added then reverted inside one PR stays in the published history.
+#   2. SHAPES — regexes for the things a denylist can never enumerate. The strings that got
+#               vscode-worktree-manager sanitised were `configurable-sms-outreach-floor` and
+#               "ticket bodies carry debtor names and amounts" — ordinary phrasing nobody would
+#               ever put on a list. Shapes catch the structural giveaways instead: a real branch
+#               fixture, a real issue identifier, a real workspace slug.
+#
+# ⚠️ THE TERM LIST IS SECRET AND MUST NEVER BE PRINTED. It enumerates the very names it exists to
+# keep out of a public repo, and this workflow's own logs are public in the repos that call it.
+# Every step below reports a LOCATION (`path:line`, or a commit SHA) and never the matched text.
+# `::add-mask::` per term is the backstop, not the control — and it is registered per line, which
+# is why the secret must be newline-separated rather than comma-separated: Actions masks a
+# secret's exact value, so a comma-joined list leaves each individual term unmasked.
+#
+# ⚠️ FAIL CLOSED. An empty, unset or unreadable term list fails the job. A guard that passes when
+# its input is missing is worse than no guard: it produces a green tick that reads as evidence.
+# This is also what happens on a fork PR — GitHub withholds secrets there — and failing is the
+# correct outcome: the maintainer reviews that diff by hand before merging.
+#
+# ⚠️ Commit messages and patches are attacker-controlled on a fork PR and are on GitHub's
+# workflow-injection list. Nothing here interpolates them: git writes them to a file, grep reads
+# the file. Keep it that way — `echo "${{ github.event.head_commit.message }}"` is the shape that
+# gets repos owned.
+
+on:
+  workflow_call:
+    inputs:
+      shape-patterns:
+        description: >-
+          Extended regexes, one per line, that must not appear in tracked files. These are not
+          secret — they are patterns, not names — so they live here rather than in the secret.
+          Defaults to the three shapes that actually leaked from this org.
+        type: string
+        required: false
+        default: |
+          thblt-thlgn/
+          \b[a-z]-[0-9]{3,}-[a-z]
+          linear\.app/[a-z0-9-]+/issue
+        # WHY these three and not "any issue identifier":
+        #
+        #   thblt-thlgn/          a personal branch prefix, so the fixture is a REAL branch
+        #   [a-z]-[0-9]{3,}-[a-z] an id-slugged branch name (`a-1661-onboarder-…`) — the form that
+        #                         BINDS an issue to the work done on it, which is the leak
+        #   linear\.app/…/issue   a concrete workspace slug. `linear.app/<workspace>/issue` in
+        #                         documentation does not match, because `<` is outside the class
+        #
+        # A bare `A-1661` is deliberately NOT a shape. It appears in prompts, error strings and
+        # docs as the example identifier, and it discloses a team key and an issue number and
+        # nothing else. Matching it would fire on every user-facing string that explains the
+        # feature — the "cries wolf on ordinary work" failure that dotfiles/.gitleaks.toml
+        # documents, and the reason that repo has no named denylist at all.
+      paths-ignore:
+        description: >-
+          Extended regex of tracked paths exempt from the SHAPE check. The guard is about what a
+          reader can see, so documentation is in scope by default and only lockfiles are not.
+        type: string
+        required: false
+        default: '^(bun\.lock|package-lock\.json|yarn\.lock)$'
+    secrets:
+      terms:
+        description: >-
+          Newline-separated list of forbidden terms. Case-insensitive, matched as fixed strings.
+          Store it as an organisation secret so it is never committed to the repo it protects.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  public-repo-guard:
+    name: no client names
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the range below walks from the merge base, which a shallow clone cannot reach.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load the term list
+        env:
+          TERMS: ${{ secrets.terms }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$TERMS" | sed -e 's/[[:space:]]*$//' -e '/^$/d' > "$RUNNER_TEMP/terms.txt"
+          count=$(wc -l < "$RUNNER_TEMP/terms.txt")
+          if [ "$count" -eq 0 ]; then
+            echo "::error::The term list is empty or was not passed to this workflow."
+            # NOT written as an example containing the expression syntax. Actions substitutes
+            # expressions textually before the shell runs and offers no escape for them, so an
+            # illustrative "pass it like this" line would interpolate the secret itself -- and a
+            # shell COMMENT is not exempt, because the substitution happens before any shell sees
+            # the script. This applies to the comment you are reading, which is why it spells
+            # nothing out.
+            echo "The caller must pass the secret named PUBLIC_REPO_TERMS as this workflow's"
+            echo "'terms' secret. See this workflow's header for the call snippet."
+            echo "On a pull request from a fork GitHub withholds secrets, and this job fails by"
+            echo "design — review that diff by hand before merging."
+            exit 1
+          fi
+          # Register a mask per term. Actions masks a secret's exact value, so an individual term
+          # printed by accident is NOT masked by the list secret alone.
+          while read -r t; do
+            [ -n "$t" ] && echo "::add-mask::$t"
+          done < "$RUNNER_TEMP/terms.txt"
+          echo "Loaded $count terms."
+
+      - name: Resolve the commit range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ] || [ "$EVENT" = "pull_request_target" ]; then
+            from="$BASE_SHA"; to="$HEAD_SHA"
+          else
+            from="$PUSH_BEFORE"; to="$PUSH_AFTER"
+          fi
+          # A branch's first push reports an all-zero "before"; fall back to the single tip commit.
+          case "$from" in
+            0000000000000000000000000000000000000000|"") from="${to}~1" ;;
+          esac
+          git rev-parse --verify "$from" >/dev/null 2>&1 || from="${to}~1"
+          echo "from=$from" >> "$GITHUB_OUTPUT"
+          echo "to=$to"     >> "$GITHUB_OUTPUT"
+          echo "Scanning $from..$to"
+
+      # Commit messages, reported by SHA. A message cannot be edited after the fact without
+      # rewriting history, so this is the half that is expensive to get wrong.
+      - name: Terms in commit messages
+        env:
+          FROM: ${{ steps.range.outputs.from }}
+          TO: ${{ steps.range.outputs.to }}
+        run: |
+          set -euo pipefail
+          rc=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            git log -1 --format='%B' "$sha" > "$RUNNER_TEMP/msg.txt"
+            if grep -qiFf "$RUNNER_TEMP/terms.txt" "$RUNNER_TEMP/msg.txt"; then
+              echo "::error::Commit $sha has a message containing a forbidden term."
+              rc=1
+            fi
+          done < <(git rev-list "$FROM..$TO")
+          [ "$rc" -eq 0 ] && echo "No forbidden term in any commit message in the range."
+          exit "$rc"
+
+      # Added lines only: a patch that REMOVES a term is a sanitising commit, and failing it is how
+      # a guard makes itself impossible to satisfy.
+      - name: Terms in added lines
+        env:
+          FROM: ${{ steps.range.outputs.from }}
+          TO: ${{ steps.range.outputs.to }}
+        run: |
+          set -euo pipefail
+          git diff --unified=0 "$FROM".."$TO" > "$RUNNER_TEMP/range.diff"
+          # Keep the +++ header lines so a hit can be attributed to a file without printing it.
+          #
+          # The result is tested by EMPTINESS, never by the pipeline's exit status: `sort` and
+          # `cut` always succeed, so `if <pipeline ending in sort>` is true whether or not grep
+          # matched — a guard written that way fails every run, or passes every run, and either
+          # way it is not measuring what it claims to.
+          awk '/^\+\+\+ /{f=substr($0,7)} /^\+[^+]/{print f"\t"substr($0,2)}' "$RUNNER_TEMP/range.diff" \
+            | { grep -iFf "$RUNNER_TEMP/terms.txt" || true; } \
+            | cut -f1 | sort -u > "$RUNNER_TEMP/hits.txt"
+          if [ -s "$RUNNER_TEMP/hits.txt" ]; then
+            echo "::error::These files add a line containing a forbidden term:"
+            cat "$RUNNER_TEMP/hits.txt"
+            exit 1
+          fi
+          echo "No forbidden term in any added line in the range."
+
+      # Whole tracked tree, not the range: a term already present before this workflow existed is
+      # still published on every clone.
+      - name: Terms in tracked files
+        run: |
+          set -euo pipefail
+          # Emptiness again, not exit status: `xargs` returns 123 when ANY grep invocation found
+          # nothing, so a tree with one hit in the first batch and none in the second reports
+          # failure-to-match overall. That is a false PASS, which is the direction that matters.
+          # -I skips binary files, which cannot be read by a human reviewer anyway.
+          git ls-files -z \
+            | xargs -0 grep -lnIiFf "$RUNNER_TEMP/terms.txt" 2>/dev/null \
+            | sort -u > "$RUNNER_TEMP/tree-hits.txt" || true
+          if [ -s "$RUNNER_TEMP/tree-hits.txt" ]; then
+            echo "::error::These tracked files contain a forbidden term:"
+            cat "$RUNNER_TEMP/tree-hits.txt"
+            exit 1
+          fi
+          echo "No forbidden term in any tracked file."
+
+      # Shapes are NOT secret, so this step may print the match — and it must, because "a real
+      # issue identifier" is not actionable without saying which line.
+      - name: Shapes that leak without naming anything
+        env:
+          PATTERNS: ${{ inputs.shape-patterns }}
+          IGNORE: ${{ inputs.paths-ignore }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PATTERNS" | sed -e 's/[[:space:]]*$//' -e '/^$/d' > "$RUNNER_TEMP/shapes.txt"
+          rc=0
+          while read -r path; do
+            if printf '%s' "$path" | grep -qE "$IGNORE"; then
+              continue
+            fi
+            if grep -nEIf "$RUNNER_TEMP/shapes.txt" "$path" > "$RUNNER_TEMP/shape-hits.txt"; then
+              while read -r hit; do
+                echo "::error file=$path,line=${hit%%:*}::$path:$hit"
+              done < "$RUNNER_TEMP/shape-hits.txt"
+              rc=1
+            fi
+          done < <(git ls-files)
+          if [ "$rc" -ne 0 ]; then
+            echo "Fixtures use acme / example — never a real branch, workspace slug or issue id."
+          else
+            echo "No leaking shapes in tracked files."
+          fi
+          exit "$rc"
