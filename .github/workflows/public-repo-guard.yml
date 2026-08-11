@@ -68,10 +68,12 @@ on:
       paths-ignore:
         description: >-
           Extended regex of tracked paths exempt from the SHAPE check. The guard is about what a
-          reader can see, so documentation is in scope by default and only lockfiles are not.
+          reader can see, so documentation stays in scope; only lockfiles and the files that
+          DEFINE the rules are exempt. A guard whose own pattern list trips it is a guard that is
+          switched off on its second day.
         type: string
         required: false
-        default: '^(bun\.lock|package-lock\.json|yarn\.lock)$'
+        default: '^(bun\.lock|package-lock\.json|yarn\.lock|lefthook\.yml|\.github/workflows/.*)$'
     secrets:
       terms:
         description: >-
