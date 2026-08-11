@@ -51,20 +51,22 @@ on:
         default: |
           thblt-thlgn/
           \b[a-z]-[0-9]{3,}-[a-z]
-          linear\.app/[a-z0-9-]+/issue
-        # WHY these three and not "any issue identifier":
+        # WHY these two, and why the obvious third one is absent:
         #
         #   thblt-thlgn/          a personal branch prefix, so the fixture is a REAL branch
         #   [a-z]-[0-9]{3,}-[a-z] an id-slugged branch name (`a-1661-onboarder-…`) — the form that
-        #                         BINDS an issue to the work done on it, which is the leak
-        #   linear\.app/…/issue   a concrete workspace slug. `linear.app/<workspace>/issue` in
-        #                         documentation does not match, because `<` is outside the class
+        #                         BINDS a ticket to the work done on it, which is the actual leak
         #
         # A bare `A-1661` is deliberately NOT a shape. It appears in prompts, error strings and
         # docs as the example identifier, and it discloses a team key and an issue number and
-        # nothing else. Matching it would fire on every user-facing string that explains the
-        # feature — the "cries wolf on ordinary work" failure that dotfiles/.gitleaks.toml
-        # documents, and the reason that repo has no named denylist at all.
+        # nothing else. Matching it fired on eight files of ordinary user-facing text — the "cries
+        # wolf on ordinary work" failure that dotfiles/.gitleaks.toml documents, and the reason
+        # that repo has no named denylist at all.
+        #
+        # A tracker URL is not a shape either. `linear.app/<slug>/issue` cannot be distinguished
+        # from `linear.app/example/issue` by a regex with no lookahead, so the rule would reject
+        # the sanctioned placeholder along with the real slug. A workspace slug that IS
+        # confidential belongs in the term list, which is what a denylist is for.
       paths-ignore:
         description: >-
           Extended regex of tracked paths exempt from the SHAPE check. The guard is about what a
