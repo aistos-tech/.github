@@ -15,3 +15,15 @@
 
 <!-- Anything research could not settle, and the reading you took. Delete if none — but an empty
      section is more honest than a confident one that hid a guess. -->
+
+<!-- Only when this PR needs a manual step: uncomment the section below. A release tool collects it
+     into the release PR, so a step written under any other heading is missed. Put every SQL
+     statement verbatim, in the order it must run.
+
+## Manual deploy steps
+
+### Before merge
+
+### After deploy
+
+-->
