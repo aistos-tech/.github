@@ -28,6 +28,13 @@ on:
         type: string
         required: false
         default: "8.28.0"
+      sha256:
+        description: >-
+          SHA-256 of gitleaks_<version>_linux_x64.tar.gz, from that release's checksums.txt. A caller
+          that overrides `version` must pass this too: the default digest fails any other version.
+        type: string
+        required: false
+        default: "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
 
 permissions:
   contents: read
@@ -43,13 +50,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The digest pins what the tag does not: a release asset stays mutable after publication.
       - name: Install gitleaks
         env:
           VERSION: ${{ inputs.version }}
+          SHA256: ${{ inputs.sha256 }}
         run: |
           set -euo pipefail
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+          curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xz -C /usr/local/bin -f gitleaks.tar.gz gitleaks
+          rm gitleaks.tar.gz
           gitleaks version
 
       - name: Scan
