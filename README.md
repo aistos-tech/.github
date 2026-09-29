@@ -36,6 +36,26 @@ Both work with no configuration. A repo with a `.gitleaks.toml` or a `commitlint
 picked up; a repo without gets the shared default, so a repository with no JS toolchain still gets
 its commit messages checked.
 
+Merged head branches are deleted by a second caller, in its own file because it triggers on
+`closed`:
+
+```yaml
+# .github/workflows/delete-head-branch.yml, in any repository
+name: Delete head branch on merge
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  delete:
+    uses: aistos-tech/.github/.github/workflows/delete-head-branch.yml@main
+    permissions:
+      contents: write
+```
+
+It never deletes a fork's branch, the default branch, `main`, `staging`, or a name passed in
+`keep`.
+
 ## What is deliberately NOT here
 
 **A shared lint/test workflow.** The stacks do not converge: a TypeScript monorepo on turbo, a
@@ -44,7 +64,8 @@ workflows and 2,000 lines of CI with integration databases, Inngest and coverage
 runners — nothing in it is extractable, and a lowest-common-denominator `ci.yml` would fit none of
 them.
 
-What generalises is what is about **git** rather than about the stack: secrets and commit messages.
+What generalises is what is about **git** rather than about the stack: secrets, commit messages
+and branch hygiene.
 That is the line this repo holds. Pushing past it produces a workflow every repo overrides.
 
 ## Pinning
