@@ -1,0 +1,63 @@
+name: Delete head branch on merge
+
+# Reusable: delete a pull request's head branch once it is merged. Call it from a repository like
+# this (the trigger must be `closed`, and the caller must grant `contents: write`):
+#
+#   on:
+#     pull_request:
+#       types: [closed]
+#   jobs:
+#     delete:
+#       uses: aistos-tech/.github/.github/workflows/delete-head-branch.yml@main
+#       permissions:
+#         contents: write
+#
+# Never deleted: an unmerged PR's branch, a fork's branch, the repository's default branch, `main`
+# and `staging` (a release PR's head is `staging`), and any name passed in `keep`. A branch already
+# gone is not an error, so a manual deletion or GitHub's own setting cannot fail the run.
+
+on:
+  workflow_call:
+    inputs:
+      keep:
+        description: Extra branch names never to delete, separated by spaces.
+        type: string
+        required: false
+        default: ""
+      runs-on:
+        description: Runner label; debt-collection passes its Blacksmith runner.
+        type: string
+        required: false
+        default: ubuntu-latest
+
+jobs:
+  delete:
+    name: Delete merged head branch
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+    steps:
+      - name: Delete head branch (no-op if kept or already gone)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          KEEP: ${{ inputs.keep }}
+        run: |
+          set -euo pipefail
+          for kept in main staging "$DEFAULT_BRANCH" $KEEP; do
+            if [ "$HEAD_REF" = "$kept" ]; then
+              echo "$HEAD_REF is kept, nothing to do"
+              exit 0
+            fi
+          done
+          if gh api "repos/$REPO/git/refs/heads/$HEAD_REF" --silent >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$HEAD_REF"
+            echo "Deleted $HEAD_REF"
+          else
+            echo "$HEAD_REF already gone, nothing to do"
+          fi
