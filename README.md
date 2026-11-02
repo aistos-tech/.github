@@ -30,11 +30,26 @@ jobs:
     uses: aistos-tech/.github/.github/workflows/gitleaks.yml@main
   commits:
     uses: aistos-tech/.github/.github/workflows/commitlint.yml@main
+  workflows:
+    uses: aistos-tech/.github/.github/workflows/actionlint.yml@main
 ```
 
-Both work with no configuration. A repo with a `.gitleaks.toml` or a `commitlint.config.js` has it
-picked up; a repo without gets the shared default, so a repository with no JS toolchain still gets
-its commit messages checked.
+All three work with no configuration. A repo with a `.gitleaks.toml`, a `commitlint.config.js` or a
+`.github/actionlint.yaml` has it picked up; a repo without gets the shared default, so a repository
+with no JS toolchain still gets its commit messages checked.
+
+`actionlint.yml` fails on every finding, shellcheck's info and style levels included, and it runs a
+pinned shellcheck rather than the runner's. A repo on self-hosted runners (Blacksmith) declares their
+labels in `.github/actionlint.yaml`:
+
+```yaml
+self-hosted-runner:
+  labels: ["blacksmith-*"]
+```
+
+⚠️ Push a change to these shared workflows **before** any caller that needs it. GitHub rejects the
+whole caller file at startup when a called workflow is missing or invalid, so every job in that
+`guards.yml` stops, the secret scan included. `lint.yml` lints this repo's own workflows on every PR.
 
 Merged head branches are deleted by a second caller, in its own file because it triggers on
 `closed`:

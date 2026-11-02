@@ -1,0 +1,13 @@
+name: Lint
+
+# Lints this repo's own workflows with the shared actionlint body, by local path. Every caller picks
+# these files up through `@main`, so a broken edit here must fail here first, not in every repo.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  workflows:
+    uses: ./.github/workflows/actionlint.yml

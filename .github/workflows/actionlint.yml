@@ -1,0 +1,84 @@
+name: Workflow lint
+
+# Reusable workflow lint. Call it from a repository like this:
+#
+#   jobs:
+#     workflows:
+#       uses: aistos-tech/.github/.github/workflows/actionlint.yml@main
+#
+# actionlint checks every workflow in the calling repo: expressions, runner labels, action inputs,
+# and every `run:` script through shellcheck. A repo-specific `.github/actionlint.yaml` (self-hosted
+# runner labels, path ignores) is picked up from the caller's checkout.
+#
+# Both binaries are pinned by digest. shellcheck in particular is NOT the runner's apt copy: its
+# version follows the runner image, so an image bump would change what fails here with no commit in
+# the calling repo. And actionlint skips the shellcheck rule silently, exit 0, when none is on PATH,
+# which is why the job prints the version before linting.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "actionlint release to pin. Bump deliberately — a floating linter changes what CI means."
+        type: string
+        required: false
+        default: "1.7.12"
+      sha256:
+        description: >-
+          SHA-256 of actionlint_<version>_linux_amd64.tar.gz, from that release's checksums file. A
+          caller that overrides `version` must pass this too.
+        type: string
+        required: false
+        default: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+      shellcheck-version:
+        description: "shellcheck release to pin. Keep it equal to the dotfiles mise.lock, so a local run agrees with CI."
+        type: string
+        required: false
+        default: "0.11.0"
+      shellcheck-sha256:
+        description: >-
+          SHA-256 of shellcheck-v<version>.linux.x86_64.tar.xz. A caller that overrides
+          `shellcheck-version` must pass this too.
+        type: string
+        required: false
+        default: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint and shellcheck
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA256: ${{ inputs.sha256 }}
+          SC_VERSION: ${{ inputs.shellcheck-version }}
+          SC_SHA256: ${{ inputs.shellcheck-sha256 }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz"
+          echo "${SHA256}  actionlint.tar.gz" | sha256sum -c -
+          sudo tar -xz -C /usr/local/bin -f actionlint.tar.gz actionlint
+          curl -sSfL -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SC_VERSION}/shellcheck-v${SC_VERSION}.linux.x86_64.tar.xz"
+          echo "${SC_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          sudo tar -xJ -C /usr/local/bin --strip-components=1 -f shellcheck.tar.xz "shellcheck-v${SC_VERSION}/shellcheck"
+          rm actionlint.tar.gz shellcheck.tar.xz
+          actionlint -version
+          /usr/local/bin/shellcheck --version
+
+      - name: Lint
+        run: |
+          set -euo pipefail
+          # The GitHub format turns each finding into an annotation on the workflow file's line. The
+          # backticks are a literal code fence in that template, not command substitution.
+          # shellcheck disable=SC2016
+          actionlint -shellcheck /usr/local/bin/shellcheck \
+            -format '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}}::{{$err.Message}} [{{$err.Kind}}]%0A```%0A{{replace $err.Snippet "\\n" "%0A"}}%0A```\n{{end}}'
