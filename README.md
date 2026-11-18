@@ -71,6 +71,13 @@ jobs:
 It never deletes a fork's branch, the default branch, `main`, `staging`, or a name passed in
 `keep`.
 
+The scope check has its own caller too: it must re-run when the PR body is edited or a label
+changes, which would re-run every `guards.yml` job. It checks that a PR opened by the Claude Code
+pipeline (its body carries `<!-- aistos:scope -->`) has a current "Beyond the ticket" section and no
+held item: the rule is aistos-dev's `includes/scope-guard.md`, the logic `scripts/scope-check.sh`.
+Any other PR passes with a notice. The caller is in `scope-check.yml`'s header; pin `uses:` and
+`script-ref` to the same SHA.
+
 ## What is deliberately NOT here
 
 **A shared lint/test workflow.** The stacks do not converge: a TypeScript monorepo on turbo, a

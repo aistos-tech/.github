@@ -1,0 +1,69 @@
+name: Scope
+
+# Reusable scope check: a pipeline PR's "Beyond the ticket" section is current and every held item
+# is answered. The rule is aistos-dev's includes/scope-guard.md; the logic is scripts/scope-check.sh.
+# Call it from its own workflow, never from guards.yml: it must re-run when the body is edited or a
+# label changes, and guards.yml would then re-run gitleaks, commitlint and actionlint each time.
+#
+#   name: Scope
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+#   concurrency:
+#     group: scope-${{ github.event.pull_request.number }}
+#     cancel-in-progress: true
+#   jobs:
+#     scope:
+#       # The release PR (head = the integration branch) is skipped by the caller.
+#       if: github.head_ref != 'staging'
+#       uses: aistos-tech/.github/.github/workflows/scope-check.yml@<sha>
+#       with:
+#         script-ref: <the same sha>
+#
+# ⚠️ The PR body is attacker-controlled and on GitHub's workflow-injection list. It reaches the
+# script through `env` and a file, never through `${{ }}` inside `run:`.
+
+on:
+  workflow_call:
+    inputs:
+      script-ref:
+        description: The aistos-tech/.github commit the script is read at; pin it to the same sha as `uses:`.
+        type: string
+        required: false
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scope:
+    name: scope
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the scope id is measured from the merge base.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: aistos-tech/.github
+          ref: ${{ inputs.script-ref }}
+          path: .scope-check
+          sparse-checkout: scripts/scope-check.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Check the scope section
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          printf '%s' "$BODY" > "$RUNNER_TEMP/body.md"
+          bash .scope-check/scripts/scope-check.sh --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --body-file "$RUNNER_TEMP/body.md" --labels "$LABELS" --manifest-ref "$BASE_SHA" \
+            --project-dir "$GITHUB_WORKSPACE"
