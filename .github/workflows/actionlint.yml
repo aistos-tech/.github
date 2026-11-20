@@ -42,6 +42,13 @@ on:
         type: string
         required: false
         default: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+      runs-on:
+        description: >-
+          Runner label for the job. A reusable workflow ignores the caller's runner, so a repo on a
+          paid runner (Blacksmith) passes its label here to keep the job off GitHub-hosted minutes.
+        type: string
+        required: false
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
@@ -49,7 +56,7 @@ permissions:
 jobs:
   actionlint:
     name: actionlint
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4

@@ -21,6 +21,13 @@ on:
         type: string
         required: false
         default: ""
+      runs-on:
+        description: >-
+          Runner label for the job. A reusable workflow ignores the caller's runner, so a repo on a
+          paid runner (Blacksmith) passes its label here to keep the job off GitHub-hosted minutes.
+        type: string
+        required: false
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
@@ -28,7 +35,7 @@ permissions:
 jobs:
   commitlint:
     name: commitlint
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     steps:
       # Full history: the range below walks from the merge base, which a shallow clone cannot reach.
       - uses: actions/checkout@v4
